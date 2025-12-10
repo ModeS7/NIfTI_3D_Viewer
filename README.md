@@ -2,6 +2,8 @@
 
 A PyQt5 application for viewing 3D NIfTI medical images with volume rendering. Originally built for visualizing the [BrainMetShare](https://aimi.stanford.edu/datasets/brainmetshare) dataset (brain MRI with metastases), but works with any NIfTI files.
 
+![NIfTI 3D Viewer Screenshot](Images/01.png)
+
 ## Features
 
 - **Multi-modality support**: Auto-detects and loads all NIfTI files (bravo, seg, t1_pre, t1_gd, flair)
