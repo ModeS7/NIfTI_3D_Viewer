@@ -82,3 +82,18 @@ patient_directory/
 ```
 
 Any `.nii.gz` or `.nii` files in the directory will be loaded as modalities.
+
+## Building Standalone Executable
+
+To create a portable `.exe` file:
+
+```bash
+pip install pyinstaller
+pyinstaller --onefile --windowed --icon=icon.ico nifti_viewer.py
+```
+
+The executable will be in the `dist/` folder (~150MB).
+
+## Credits
+
+Icon image: [MRI of Human Brain](https://commons.wikimedia.org/wiki/File:MRI_of_Human_Brain.jpg) from Wikimedia Commons.
