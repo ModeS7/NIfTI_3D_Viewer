@@ -44,6 +44,7 @@ try:
         QLabel, QGroupBox, QSplitter, QComboBox, QCheckBox
     )
     from PyQt5.QtCore import Qt
+    from PyQt5.QtGui import QIcon
 except ImportError:
     print("Error: PyQt5 not installed. Run: pip install PyQt5")
     sys.exit(1)
@@ -1224,6 +1225,7 @@ class NiftiViewer(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("NIfTI 3D Viewer")
+        self._set_app_icon()
         self.setGeometry(100, 100, 1400, 900)
         self.setStyleSheet(DARK_THEME)
 
@@ -1244,6 +1246,20 @@ class NiftiViewer(QMainWindow):
         self.overlay_enabled: bool = True  # Always enabled, controlled by seg opacity
 
         self._setup_ui()
+
+    def _set_app_icon(self) -> None:
+        """Set the application window icon."""
+        # Handle both development and PyInstaller bundled paths
+        if getattr(sys, 'frozen', False):
+            # Running as bundled exe
+            base_path = Path(sys._MEIPASS)
+        else:
+            # Running as script
+            base_path = Path(__file__).parent
+
+        icon_path = base_path / "icon.png"
+        if icon_path.exists():
+            self.setWindowIcon(QIcon(str(icon_path)))
 
     def _setup_ui(self) -> None:
         """Set up the user interface."""
