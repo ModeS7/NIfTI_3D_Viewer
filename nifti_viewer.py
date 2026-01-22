@@ -458,6 +458,7 @@ class VolumeWidget(QWidget):
         self.bg_color: float = 0.0  # Background color (0.0 = black, 1.0 = white)
         self.overlay_renderer = None  # Track overlay renderer for cleanup
         self.seg_data_backup: Optional[np.ndarray] = None  # Store seg data for toggling
+        self.current_spacing: tuple = (1.0, 1.0, 1.0)  # Voxel spacing (x, y, z) in mm
 
         # Fullscreen state
         self.is_fullscreen: bool = False
@@ -522,7 +523,8 @@ class VolumeWidget(QWidget):
         seg_overlay: Optional[np.ndarray] = None,
         seg_data_for_backup: Optional[np.ndarray] = None,
         reset_camera: bool = False,
-        reset_clim: bool = False
+        reset_clim: bool = False,
+        spacing: tuple = (1.0, 1.0, 1.0)
     ) -> None:
         """Set the 3D volume to render.
 
@@ -533,9 +535,11 @@ class VolumeWidget(QWidget):
             seg_data_for_backup: Seg data to store for fullscreen toggle (even if overlay disabled)
             reset_camera: If True, reset camera to fit volume
             reset_clim: If True, reset contrast to full data range
+            spacing: Voxel spacing (x, y, z) in mm for proper 3D reconstruction
         """
         # Store for re-rendering
         self.current_data = data.copy()
+        self.current_spacing = spacing
         self.current_seg_overlay = seg_overlay.copy() if seg_overlay is not None else None
         # Store seg data for fullscreen independent toggle (use backup param if provided)
         backup_source = seg_data_for_backup if seg_data_for_backup is not None else seg_overlay
@@ -866,10 +870,11 @@ class VolumeWidget(QWidget):
             if seg_overlay is not None:
                 seg_overlay = seg_overlay[::step, ::step, ::step]
 
-        # Create base volume grid
+        # Create base volume grid with actual voxel spacing
         grid = pv.ImageData()
         grid.dimensions = data.shape
-        grid.spacing = (step, step, step)
+        sx, sy, sz = self.current_spacing
+        grid.spacing = (sx * step, sy * step, sz * step)
         grid.point_data["values"] = data.flatten(order="F")
 
         if self.is_segmentation:
@@ -918,7 +923,7 @@ class VolumeWidget(QWidget):
             if seg_overlay is not None and seg_overlay.max() > 0:
                 seg_grid = pv.ImageData()
                 seg_grid.dimensions = seg_overlay.shape
-                seg_grid.spacing = (step, step, step)
+                seg_grid.spacing = (sx * step, sy * step, sz * step)
                 seg_grid.point_data["values"] = seg_overlay.flatten(order="F")
                 contour = seg_grid.contour([0.5])
 
@@ -1114,10 +1119,11 @@ class VolumeWidget(QWidget):
             if seg_overlay is not None:
                 seg_overlay = seg_overlay[::step, ::step, ::step]
 
-        # Create base volume grid
+        # Create base volume grid with actual voxel spacing
         grid = pv.ImageData()
         grid.dimensions = data.shape
-        grid.spacing = (step, step, step)
+        sx, sy, sz = self.current_spacing
+        grid.spacing = (sx * step, sy * step, sz * step)
         grid.point_data["values"] = data.flatten(order="F")
 
         # Clean up any existing overlay renderer first (always do this)
@@ -1178,7 +1184,7 @@ class VolumeWidget(QWidget):
             if seg_overlay is not None and seg_overlay.max() > 0:
                 seg_grid = pv.ImageData()
                 seg_grid.dimensions = seg_overlay.shape
-                seg_grid.spacing = (step, step, step)
+                seg_grid.spacing = (sx * step, sy * step, sz * step)
                 seg_grid.point_data["values"] = seg_overlay.flatten(order="F")
                 contour = seg_grid.contour([0.5])
 
@@ -1552,7 +1558,8 @@ class NiftiViewer(QMainWindow):
             try:
                 img = nib.load(str(nii_path))
                 data = img.get_fdata().astype(np.float32)
-                self.modalities[name] = data
+                spacing = tuple(float(s) for s in img.header.get_zooms()[:3])
+                self.modalities[name] = {'data': data, 'spacing': spacing}
             except (OSError, nib.filebasedimages.ImageFileError) as e:
                 logger.error("Error loading %s: %s", nii_path, e)
 
@@ -1649,7 +1656,7 @@ class NiftiViewer(QMainWindow):
             return
 
         self.current_modality = modality
-        data = self.modalities[modality]
+        data = self.modalities[modality]['data']
 
         # Update 2D views
         self._apply_modality_to_2d_views(data)
@@ -1676,17 +1683,21 @@ class NiftiViewer(QMainWindow):
         self.modality_combo.blockSignals(False)
 
         self.current_modality = modality
-        data = self.modalities[modality]
+        modality_info = self.modalities[modality]
+        data = modality_info['data']
+        spacing = modality_info['spacing']
 
         # Update 2D views
         self._apply_modality_to_2d_views(data)
 
         # Update volume widget data for fullscreen rendering (not 3D view)
         is_seg = 'seg' in modality.lower()
-        seg_data = self.modalities.get('seg') if not is_seg else None
+        seg_entry = self.modalities.get('seg')
+        seg_data = seg_entry['data'] if seg_entry and not is_seg else None
         seg_overlay = seg_data if self.overlay_enabled else None
 
         self.volume_widget.current_data = data.copy()
+        self.volume_widget.current_spacing = spacing
         self.volume_widget.current_seg_overlay = seg_overlay.copy() if seg_overlay is not None else None
         self.volume_widget.seg_data_backup = seg_data.copy() if seg_data is not None else None
         self.volume_widget.is_segmentation = is_seg
@@ -1697,7 +1708,8 @@ class NiftiViewer(QMainWindow):
 
     def _update_overlay_state(self) -> None:
         """Update overlay data on all canvases based on current state."""
-        seg_data = self.modalities.get('seg')
+        seg_entry = self.modalities.get('seg')
+        seg_data = seg_entry['data'] if seg_entry else None
         show = self.overlay_enabled and seg_data is not None
 
         for canvas in [self.axial_canvas, self.coronal_canvas, self.sagittal_canvas]:
@@ -1713,19 +1725,23 @@ class NiftiViewer(QMainWindow):
         if not self.current_modality or self.current_modality not in self.modalities:
             return
 
-        data = self.modalities[self.current_modality]
+        modality_info = self.modalities[self.current_modality]
+        data = modality_info['data']
+        spacing = modality_info['spacing']
         is_seg = 'seg' in self.current_modality.lower()
 
         # Always pass seg data for backup (so fullscreen can use it independently)
         # But only show overlay if enabled
-        seg_data = self.modalities.get('seg') if not is_seg else None
+        seg_entry = self.modalities.get('seg')
+        seg_data = seg_entry['data'] if seg_entry and not is_seg else None
         seg_overlay = seg_data if self.overlay_enabled else None
 
         if reset_contrast:
             # Reset to full data range
             self.volume_widget.set_volume(data, is_segmentation=is_seg, seg_overlay=seg_overlay,
                                           seg_data_for_backup=seg_data,
-                                          reset_camera=reset_camera, reset_clim=True)
+                                          reset_camera=reset_camera, reset_clim=True,
+                                          spacing=spacing)
             self._update_contrast_sliders()
         else:
             # Preserve current contrast percentages
@@ -1735,7 +1751,8 @@ class NiftiViewer(QMainWindow):
             # Set volume without resetting clim (we'll set it manually)
             self.volume_widget.set_volume(data, is_segmentation=is_seg, seg_overlay=seg_overlay,
                                           seg_data_for_backup=seg_data,
-                                          reset_camera=reset_camera, reset_clim=False)
+                                          reset_camera=reset_camera, reset_clim=False,
+                                          spacing=spacing)
 
             # Recalculate clim from preserved percentages and new data range
             data_range = self.volume_widget.data_max - self.volume_widget.data_min
@@ -1896,7 +1913,7 @@ class NiftiViewer(QMainWindow):
         if not self.current_modality or self.current_modality not in self.modalities:
             return
 
-        data = self.modalities[self.current_modality]
+        data = self.modalities[self.current_modality]['data']
 
         # Reset slice sliders to middle position
         mid_slices = [s // 2 for s in data.shape]
