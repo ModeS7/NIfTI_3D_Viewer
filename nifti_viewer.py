@@ -1249,7 +1249,7 @@ class NiftiViewer(QMainWindow):
         self.max_slices = [1, 1, 1]
 
         # Overlay state
-        self.overlay_enabled: bool = True  # Always enabled, controlled by seg opacity
+        self.overlay_enabled: bool = False  # Mirrors seg opacity slider: True iff opacity > 0
 
         self._setup_ui()
 
@@ -1558,7 +1558,13 @@ class NiftiViewer(QMainWindow):
             try:
                 img = nib.load(str(nii_path))
                 data = img.get_fdata().astype(np.float32)
-                spacing = tuple(float(s) for s in img.header.get_zooms()[:3])
+                # Extract voxel spacing from affine matrix (more reliable than header.get_zooms())
+                affine = img.affine
+                spacing = (
+                    float(np.linalg.norm(affine[:3, 0])),  # spacing along axis 0
+                    float(np.linalg.norm(affine[:3, 1])),  # spacing along axis 1
+                    float(np.linalg.norm(affine[:3, 2])),  # spacing along axis 2
+                )
                 self.modalities[name] = {'data': data, 'spacing': spacing}
             except (OSError, nib.filebasedimages.ImageFileError) as e:
                 logger.error("Error loading %s: %s", nii_path, e)
@@ -1841,9 +1847,12 @@ class NiftiViewer(QMainWindow):
         self.seg_opacity_label.setText(f"{value}%")
 
     def _on_seg_opacity_changed(self) -> None:
-        """Handle seg overlay opacity slider release - update 3D."""
+        """Handle seg overlay opacity slider release - update 3D and 2D overlay visibility."""
         opacity = self.seg_opacity_slider.value() / 100.0
         self.volume_widget.update_seg_opacity(opacity)
+        self.overlay_enabled = opacity > 0
+        self._update_overlay_state()
+        self._update_all_views()
 
     def _on_seg_always_visible_changed(self, state: int) -> None:
         """Handle seg always visible checkbox toggle."""
@@ -1891,11 +1900,14 @@ class NiftiViewer(QMainWindow):
             self.clim_min_slider.blockSignals(False)
             self.clim_max_slider.blockSignals(False)
 
-        # Sync seg opacity
+        # Sync seg opacity (and propagate to 2D overlay)
         self.seg_opacity_slider.blockSignals(True)
         self.seg_opacity_slider.setValue(int(vw.seg_opacity * 100))
         self.seg_opacity_label.setText(f"{int(vw.seg_opacity * 100)}%")
         self.seg_opacity_slider.blockSignals(False)
+        self.overlay_enabled = vw.seg_opacity > 0
+        self._update_overlay_state()
+        self._update_all_views()
 
         # Sync seg always visible
         self.seg_always_visible_checkbox.blockSignals(True)
@@ -1947,9 +1959,11 @@ class NiftiViewer(QMainWindow):
         self.shade_checkbox.setChecked(False)
         self.shade_checkbox.blockSignals(False)
 
-        # Reset seg opacity to 0%
+        # Reset seg opacity to 0% (also hides 2D overlay)
         self.seg_opacity_slider.setValue(0)
         self.seg_opacity_label.setText("0%")
+        self.overlay_enabled = False
+        self._update_overlay_state()
 
         # Reset seg always visible off
         self.seg_always_visible_checkbox.blockSignals(True)
@@ -1960,10 +1974,11 @@ class NiftiViewer(QMainWindow):
         self.bg_slider.setValue(0)
         self.bg_label.setText("0%")
 
-        # Reset 2D view zoom/pan
+        # Reset 2D view zoom/pan and redraw to apply cleared overlay
         self.axial_canvas.reset_zoom()
         self.coronal_canvas.reset_zoom()
         self.sagittal_canvas.reset_zoom()
+        self._update_all_views()
 
         # Apply all reset values to VolumeWidget
         self.volume_widget.colormap = "gray"
