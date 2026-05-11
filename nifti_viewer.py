@@ -1700,7 +1700,8 @@ class NiftiViewer(QMainWindow):
         is_seg = 'seg' in modality.lower()
         seg_entry = self.modalities.get('seg')
         seg_data = seg_entry['data'] if seg_entry and not is_seg else None
-        seg_overlay = seg_data if self.overlay_enabled else None
+        # Always pass seg overlay; 3D visibility is controlled by seg_opacity/seg_always_visible
+        seg_overlay = seg_data
 
         self.volume_widget.current_data = data.copy()
         self.volume_widget.current_spacing = spacing
@@ -1736,11 +1737,10 @@ class NiftiViewer(QMainWindow):
         spacing = modality_info['spacing']
         is_seg = 'seg' in self.current_modality.lower()
 
-        # Always pass seg data for backup (so fullscreen can use it independently)
-        # But only show overlay if enabled
+        # Always pass seg data; 3D visibility is controlled by seg_opacity/seg_always_visible
         seg_entry = self.modalities.get('seg')
         seg_data = seg_entry['data'] if seg_entry and not is_seg else None
-        seg_overlay = seg_data if self.overlay_enabled else None
+        seg_overlay = seg_data
 
         if reset_contrast:
             # Reset to full data range
@@ -1850,13 +1850,17 @@ class NiftiViewer(QMainWindow):
         """Handle seg overlay opacity slider release - update 3D and 2D overlay visibility."""
         opacity = self.seg_opacity_slider.value() / 100.0
         self.volume_widget.update_seg_opacity(opacity)
-        self.overlay_enabled = opacity > 0
+        self.overlay_enabled = opacity > 0 or self.seg_always_visible_checkbox.isChecked()
         self._update_overlay_state()
         self._update_all_views()
 
     def _on_seg_always_visible_changed(self, state: int) -> None:
-        """Handle seg always visible checkbox toggle."""
-        self.volume_widget.update_seg_always_visible(state == Qt.Checked)
+        """Handle seg always visible checkbox toggle - update 3D and 2D overlay visibility."""
+        enabled = (state == Qt.Checked)
+        self.volume_widget.update_seg_always_visible(enabled)
+        self.overlay_enabled = enabled or self.seg_opacity_slider.value() > 0
+        self._update_overlay_state()
+        self._update_all_views()
 
     def _on_bg_label_update(self, value: int) -> None:
         """Update background label while dragging (no 3D update)."""
@@ -1905,7 +1909,7 @@ class NiftiViewer(QMainWindow):
         self.seg_opacity_slider.setValue(int(vw.seg_opacity * 100))
         self.seg_opacity_label.setText(f"{int(vw.seg_opacity * 100)}%")
         self.seg_opacity_slider.blockSignals(False)
-        self.overlay_enabled = vw.seg_opacity > 0
+        self.overlay_enabled = vw.seg_opacity > 0 or vw.seg_always_visible
         self._update_overlay_state()
         self._update_all_views()
 
